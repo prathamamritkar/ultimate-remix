@@ -1,0 +1,82 @@
+{
+  "name": "ultimate-remix",
+  "version": "1.0.0",
+  "description": "Multi-genre arcade game with educational elements",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx http-server -p 8000 -c-1",
+    "dev": "npx http-server -p 8000 -c-1 -o",
+    "lint": "npx eslint . --ext .js,.html --ignore-pattern node_modules/",
+    "format": "npx prettier --write \"**/*.{js,html,css,md,json}\"",
+    "serve": "npx http-server -p 8000",
+    "build": "echo 'No build process needed - static HTML/JS/CSS'",
+    "test": "echo 'No automated tests configured yet'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/prathamamritkar/ultimate-remix.git"
+  },
+  "keywords": [
+    "game",
+    "education",
+    "arcade",
+    "html5",
+    "canvas",
+    "javascript",
+    "learning",
+    "mobile",
+    "responsive",
+    "progressive-web-app",
+    "farcade",
+    "multi-genre",
+    "browser-game"
+  ],
+  "author": {
+    "name": "Pratham Amritkar",
+    "url": "https://github.com/prathamamritkar"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/prathamamritkar/ultimate-remix/issues"
+  },
+  "homepage": "https://github.com/prathamamritkar/ultimate-remix#readme",
+  "engines": {
+    "node": ">=12.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^8.0.0",
+    "prettier": "^2.0.0",
+    "http-server": "^14.0.0"
+  },
+  "browserslist": [
+    "last 3 Chrome versions",
+    "last 3 Firefox versions",
+    "last 3 Safari versions",
+    "last 3 Edge versions",
+    "iOS >= 11",
+    "Android >= 6"
+  ],
+  "files": [
+    "index.html",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md"
+  ],
+  "funding": {
+    "type": "github",
+    "url": "https://github.com/sponsors/prathamamritkar"
+  },
+  "config": {
+    "game": {
+      "name": "Ultimate REMIX",
+      "version": "1.0.0",
+      "worlds": 5,
+      "educational": true,
+      "mobile": true,
+      "languages": ["en", "es"]
+    }
+  }
+}

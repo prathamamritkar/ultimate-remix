@@ -1,0 +1,61 @@
+{
+  "name": "Ultimate REMIX",
+  "short_name": "REMIX",
+  "description": "Multi-genre arcade game with educational elements",
+  "version": "1.0.0",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#4facfe",
+  "background_color": "#87d3ff",
+  "scope": "/",
+  "lang": "en-US",
+  "categories": ["games", "education", "entertainment"],
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='40' fill='%234facfe'/%3E%3Ctext x='50' y='55' text-anchor='middle' font-size='30' fill='white' font-family='sans-serif'%3E🎮%3C/text%3E%3C/svg%3E",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'%3E%3Crect width='400' height='300' fill='%2387d3ff'/%3E%3Ctext x='200' y='150' text-anchor='middle' font-size='24' fill='white' font-family='sans-serif'%3EUltimate REMIX%3C/text%3E%3C/svg%3E",
+      "sizes": "400x300",
+      "type": "image/svg+xml",
+      "form_factor": "wide",
+      "label": "Ultimate REMIX gameplay"
+    }
+  ],
+  "features": [
+    "Cross-platform",
+    "Offline capable",
+    "Educational content",
+    "Progressive difficulty",
+    "Multiple game modes"
+  ],
+  "shortcuts": [
+    {
+      "name": "Quick Play",
+      "short_name": "Play",
+      "description": "Start playing immediately",
+      "url": "/",
+      "icons": [
+        {
+          "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%234facfe' d='M8 5v14l11-7z'/%3E%3C/svg%3E",
+          "sizes": "24x24",
+          "type": "image/svg+xml"
+        }
+      ]
+    }
+  ],
+  "related_applications": [],
+  "prefer_related_applications": false,
+  "edge_side_panel": {
+    "preferred_width": 400
+  },
+  "launch_handler": {
+    "client_mode": "focus-existing"
+  }
+}
