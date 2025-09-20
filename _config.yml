@@ -1,0 +1,44 @@
+# Ultimate REMIX - GitHub Pages Configuration
+
+# This file helps configure the repository for GitHub Pages deployment
+
+# Game Information
+title: "Ultimate REMIX"
+description: "Multi-genre arcade game with educational elements"
+author: "Pratham Amritkar"
+
+# Repository Information
+repository: "prathamamritkar/ultimate-remix"
+github_url: "https://github.com/prathamamritkar/ultimate-remix"
+
+# Game Configuration
+game:
+  name: "Ultimate REMIX"
+  version: "1.0.0"
+  main_file: "index.html"
+  
+# Features
+features:
+  - "5 Unique Game Worlds"
+  - "Educational Content"
+  - "RPG Progression"
+  - "Mobile Friendly"
+  - "Accessibility Support"
+
+# Supported Browsers
+browsers:
+  - "Chrome 60+"
+  - "Firefox 55+"
+  - "Safari 11+"
+  - "Edge 79+"
+
+# Educational Content
+education:
+  subjects:
+    - "Mathematics"
+    - "Language Learning"
+    - "Geography"
+    - "Motor Skills"
+  languages:
+    - "English"
+    - "Spanish"
