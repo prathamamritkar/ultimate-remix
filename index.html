@@ -1,0 +1,2249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <title>Ultimate REMIX</title>
+    <!-- Farcade Game SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/@farcade/game-sdk@0.2.0/dist/index.min.js"></script>
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        padding: 0;
+        background: linear-gradient(135deg, #ffd700 0%, #ff8c00 100%);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+        overflow: hidden;
+        /* Prevents pull-to-refresh and other unwanted touch actions */
+        touch-action: none;
+      }
+
+      canvas {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+        /* Prevents text selection on rapid taps */
+        user-select: none;
+        -webkit-user-select: none;
+        -ms-user-select: none;
+        -webkit-tap-highlight-color: transparent;
+        background: #87d3ff;
+      }
+
+      /* High contrast support */
+      @media (prefers-contrast: high) {
+        body {
+          background: #000;
+        }
+      }
+
+      /* Reduced motion support */
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <canvas
+      id="gameCanvas"
+      aria-label="Ultimate REMIX - Multi-genre arcade game"
+      role="application"
+      tabindex="0"
+    ></canvas>
+
+    <script>
+      (() => {
+        // Game States
+        const GAME_STATES = {
+          LOADING: "loading",
+          CONTROLS: "controls",
+          LEVEL_TRANSITION: "level_transition",
+          PLAYING: "playing",
+          GAME_OVER: "game_over",
+          INTERSTITIAL: "interstitial", // New state for post-level mini-games
+          GAME_COMPLETE: "game_complete",
+        };
+
+        // Core config
+        const LEVEL_DURATION = 5; // Each level lasts 5 seconds
+        const SAFE_MARGIN = 24;
+        const PIPE_WIDTH = 64;
+        const PIPE_GAP_MIN = 120;
+        const PIPE_GAP_MAX = 180;
+        const PIPE_DISTANCE_MIN = 300; // Increased for better mobile playability
+        const PIPE_DISTANCE_MAX = 380; // Increased for better mobile playability
+        const PIPE_SPEED = 180;
+        const BIRD_RADIUS = 14;
+        const FLAP_IMPULSE_BASE = -340; // Increased jump power for better control
+        const GRAVITY = 950;
+        const BIRD_VX = 40;
+        const SPAWN_LEAD = 20;
+        const SCORE_TEXT_SIZE = 22;
+        const START_ZONE_HEIGHT = 50;
+
+        // DOM
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d", {
+          alpha: false,
+        });
+
+        let DPR = Math.max(1, window.devicePixelRatio || 1);
+        let W = window.innerWidth;
+        let H = window.innerHeight;
+
+        // Global state
+        let gameState = GAME_STATES.LOADING;
+        let running = false;
+        let lastTime = 0;
+        let isMuted = false;
+        let gameOverCalled = false;
+        let score = 0;
+
+        // Loading & transition state
+        let loadingProgress = 0;
+        let loadingTimer = 0;
+        let transitionTimer = 0;
+        let transitionText = "";
+        let controlsTimer = 0;
+
+        // Flag to ensure Farcade ready is called only once
+        let farcadeReadySignaled = false;
+
+        // Educational / extra features state
+        let triviaPending = null;
+
+        // Player-collected letters for language learning
+        let playerCollectedLetters = {
+          EN: "",
+          ES: "",
+        };
+
+        // Beat / rhythm manager
+        let beatInterval = 0.6;
+        let beatTimer = 0;
+        let lastBeat = performance.now() / 1000;
+        let beatPulse = 0;
+        const beatTolerance = 0.15;
+
+        // Font styles for consistency
+        function getFont(style) {
+          switch (style) {
+            case "title-main":
+              return `bold ${Math.min(64, W * 0.15)}px sans-serif`;
+            case "title-sub":
+              return `bold ${Math.min(48, W * 0.1)}px sans-serif`;
+            case "title-screen":
+              return `bold ${Math.min(42, W * 0.1)}px sans-serif`;
+            case "subtitle":
+              return `bold ${Math.min(32, W * 0.08)}px sans-serif`;
+            case "body":
+              return `${Math.min(20, W * 0.05)}px sans-serif`;
+            case "body-small":
+              return `${Math.min(18, W * 0.04)}px sans-serif`;
+            case "ui":
+              return `bold ${Math.min(SCORE_TEXT_SIZE, W * 0.05)}px sans-serif`;
+            case "item-bold":
+              return "bold 12px sans-serif";
+            case "item":
+              return "12px sans-serif";
+            case "button":
+              return "bold 14px sans-serif";
+            case "platform":
+              return "bold 12px sans-serif";
+            case "controls-title":
+              return `bold ${Math.min(32, W * 0.08)}px sans-serif`;
+            case "controls-body":
+              return `${Math.min(18, W * 0.045)}px sans-serif`;
+            case "controls-prompt":
+              return `bold ${Math.min(24, W * 0.06)}px sans-serif`;
+            default:
+              return "12px sans-serif";
+          }
+        }
+
+        // Equipment definitions
+        const EQUIPMENT_DEFS = {
+          wings_1: {
+            id: "wings_1",
+            name: "Swift Wings",
+            slot: "wings",
+            mods: {
+              flapBoost: -20,
+            },
+            cost: 30,
+          },
+          wings_2: {
+            id: "wings_2",
+            name: "Power Wings",
+            slot: "wings",
+            mods: {
+              flapBoost: -40,
+            },
+            cost: 60,
+          },
+          boots_1: {
+            id: "boots_1",
+            name: "Speed Boots",
+            slot: "boots",
+            mods: {
+              speedMult: 1.15,
+            },
+            cost: 25,
+          },
+          boots_2: {
+            id: "boots_2",
+            name: "Turbo Boots",
+            slot: "boots",
+            mods: {
+              speedMult: 1.3,
+            },
+            cost: 50,
+          },
+          gloves_1: {
+            id: "gloves_1",
+            name: "Quick Gloves",
+            slot: "gloves",
+            mods: {
+              reactionMult: 1.2,
+            },
+            cost: 35,
+          },
+          gloves_2: {
+            id: "gloves_2",
+            name: "Reflex Gloves",
+            slot: "gloves",
+            mods: {
+              reactionMult: 1.4,
+            },
+            cost: 70,
+          },
+          gem_1: {
+            id: "gem_1",
+            name: "Focus Gem",
+            slot: "gem",
+            mods: {
+              puzzleMult: 1.25,
+            },
+            cost: 40,
+          },
+          gem_2: {
+            id: "gem_2",
+            name: "Wisdom Gem",
+            slot: "gem",
+            mods: {
+              puzzleMult: 1.5,
+            },
+            cost: 80,
+          },
+        };
+
+        // RPG & progression + card game layer
+        const player = {
+          level: 1,
+          xp: 0,
+          xpToLevel: 100,
+          coins: 50,
+          skillPoints: 0,
+          stats: {
+            speed: 1.0,
+            reaction: 1.0,
+            puzzle: 1.0,
+          },
+          equipment: {
+            wings: null,
+            boots: null,
+            gloves: null,
+            gem: null,
+          },
+          inventory: [EQUIPMENT_DEFS.wings_1],
+          cards: [],
+          deck: [],
+          tokens: 2,
+          mapProgress: 0,
+        };
+
+        // Card definitions
+        const CARD_DEFS = [
+          {
+            id: "c_bird_1",
+            name: "Gale Feather",
+            type: "bird",
+            mods: {
+              flapBoost: -30,
+              speedMult: 1.04,
+            },
+            rarity: "common",
+          },
+          {
+            id: "c_bird_2",
+            name: "Thermal Wing",
+            type: "bird",
+            mods: {
+              flapBoost: -18,
+              speedMult: 1.08,
+            },
+            rarity: "rare",
+          },
+          {
+            id: "c_runner_1",
+            name: "Sprinter Charm",
+            type: "runner",
+            mods: {
+              speedMult: 1.12,
+            },
+            rarity: "common",
+          },
+          {
+            id: "c_runner_2",
+            name: "Momentum Token",
+            type: "runner",
+            mods: {
+              speedMult: 1.18,
+            },
+            rarity: "rare",
+          },
+          {
+            id: "c_mole_1",
+            name: "Reflex Tonic",
+            type: "mole",
+            mods: {
+              reactionMult: 1.18,
+            },
+            rarity: "common",
+          },
+          {
+            id: "c_mole_2",
+            name: "Zen Focus",
+            type: "mole",
+            mods: {
+              reactionMult: 1.28,
+            },
+            rarity: "rare",
+          },
+        ];
+
+        // World management
+        const worldNames = ["Sky Maze", "Momentum Run", "Whack Outpost", "Word Lab", "Endless Crossing"];
+        let worldIndex = 0;
+        let worldState = {};
+
+        // Bird
+        let bird = {
+          x: 0,
+          y: 0,
+          vx: BIRD_VX,
+          vy: 0,
+          radius: BIRD_RADIUS,
+          angle: 0,
+        };
+
+        // Visual layers
+        const bgLayers = [
+          {
+            speed: 20,
+            color1: "#a6e0ff",
+            color2: "#87d3ff",
+          },
+          {
+            speed: 40,
+            color1: "#92d9ff",
+            color2: "#6fc7ff",
+          },
+          {
+            speed: 80,
+            color1: "#7ec8ff",
+            color2: "#5fbfff",
+          },
+        ];
+        let bgOffset = 0;
+
+        // Audio
+        let audioCtx = null;
+
+        function ensureAudioCtx() {
+          if (!audioCtx) {
+            try {
+              audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            } catch (e) {
+              console.warn("Audio not available");
+            }
+          }
+        }
+
+        function beep(freq = 440, dur = 0.06) {
+          if (isMuted || !audioCtx) return;
+          try {
+            ensureAudioCtx();
+            if (audioCtx.state === "suspended") {
+              audioCtx.resume();
+            }
+            const o = audioCtx.createOscillator();
+            const g = audioCtx.createGain();
+            o.type = "sine";
+            o.frequency.setValueAtTime(freq, audioCtx.currentTime);
+            g.gain.setValueAtTime(0.0001, audioCtx.currentTime);
+            o.connect(g);
+            g.connect(audioCtx.destination);
+            o.start(audioCtx.currentTime);
+            g.gain.exponentialRampToValueAtTime(0.08, audioCtx.currentTime + 0.01);
+            g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + dur);
+            o.stop(audioCtx.currentTime + dur + 0.02);
+          } catch (e) {
+            console.warn("Audio error:", e);
+          }
+        }
+
+        // Farcade SDK Wrappers
+        function farcadeReady() {
+          if (farcadeReadySignaled) return;
+          farcadeReadySignaled = true;
+          if (window.FarcadeSDK?.singlePlayer?.actions?.ready) {
+            window.FarcadeSDK.singlePlayer.actions.ready();
+          }
+        }
+
+        function farcadeGameOver(sc) {
+          if (gameOverCalled) return;
+          gameOverCalled = true;
+          farcadeHaptic(); // Haptic feedback on game over
+          if (window.FarcadeSDK?.singlePlayer?.actions?.gameOver) {
+            window.FarcadeSDK.singlePlayer.actions.gameOver({
+              score: sc,
+            });
+          }
+        }
+
+        function farcadeHaptic() {
+          if (window.FarcadeSDK?.singlePlayer?.actions?.hapticFeedback) {
+            window.FarcadeSDK.singlePlayer.actions.hapticFeedback();
+          }
+        }
+
+        // Apply equipment modifiers
+        function applyEquipmentToPlayer() {
+          player.stats.speed = 1.0;
+          player.stats.reaction = 1.0;
+          player.stats.puzzle = 1.0;
+          bird.vx = BIRD_VX;
+          let flapBoost = 0;
+
+          if (player.equipment.wings) flapBoost += player.equipment.wings.mods.flapBoost || 0;
+          if (player.equipment.boots) {
+            const m = player.equipment.boots.mods.speedMult || 1.0;
+            player.stats.speed *= m;
+            bird.vx = BIRD_VX * player.stats.speed;
+          }
+          if (player.equipment.gloves) player.stats.reaction *= player.equipment.gloves.mods.reactionMult || 1.0;
+          if (player.equipment.gem) player.stats.puzzle *= player.equipment.gem.mods.puzzleMult || 1.0;
+
+          for (const cid of player.deck) {
+            const c = CARD_DEFS.find((x) => x.id === cid);
+            if (!c) continue;
+            if (c.mods.speedMult) {
+              player.stats.speed *= c.mods.speedMult;
+              bird.vx = BIRD_VX * player.stats.speed;
+            }
+            if (c.mods.reactionMult) player.stats.reaction *= c.mods.reactionMult;
+            if (c.mods.puzzleMult) player.stats.puzzle *= c.mods.puzzleMult;
+            if (c.mods.flapBoost) flapBoost += c.mods.flapBoost;
+          }
+          bird._flapImpulse = FLAP_IMPULSE_BASE + flapBoost;
+        }
+
+        // Simple level up
+        function grantXP(x) {
+          player.xp += x;
+          while (player.xp >= player.xpToLevel) {
+            player.xp -= player.xpToLevel;
+            player.level++;
+            player.skillPoints++;
+            player.xpToLevel = Math.floor(player.xpToLevel * 1.25);
+            player.coins += 10;
+            beep(1600, 0.08);
+            farcadeHaptic();
+          }
+        }
+
+        // Resize
+        function resize() {
+          DPR = Math.max(1, window.devicePixelRatio || 1);
+          W = window.innerWidth;
+          H = window.innerHeight;
+
+          canvas.width = Math.round(W * DPR);
+          canvas.height = Math.round(H * DPR);
+          canvas.style.width = W + "px";
+          canvas.style.height = H + "px";
+          ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+          // Clamp bird position to new screen bounds after resize
+          const m = SAFE_MARGIN;
+          bird.x = Math.min(Math.max(bird.x, m), W - m);
+          bird.y = Math.min(Math.max(bird.y, m), H - m);
+        }
+
+        // Utility pointer mapping
+        function getPointerPos(e) {
+          const rect = canvas.getBoundingClientRect();
+          // Handle both mouse and touch events
+          const touch = e.touches ? e.touches[0] : e;
+          const px = ((touch.clientX - rect.left) / rect.width) * W;
+          const py = ((touch.clientY - rect.top) / rect.height) * H;
+          return {
+            x: px,
+            y: py,
+          };
+        }
+
+        // Collision helpers
+        function circleRectCollision(cx, cy, r, rx, ry, rw, rh) {
+          const nearestX = Math.max(rx, Math.min(cx, rx + rw));
+          const nearestY = Math.max(ry, Math.min(cy, ry + rh));
+          const dx = cx - nearestX;
+          const dy = cy - nearestY;
+          return dx * dx + dy * dy <= r * r;
+        }
+
+        function circleCircleCollision(x1, y1, r1, x2, y2, r2) {
+          const dx = x1 - x2,
+            dy = y1 - y2;
+          return dx * dx + dy * dy <= (r1 + r2) * (r1 + r2);
+        }
+
+        // Word puzzle helper
+        const sampleWordsEN = ["GAME", "CODE", "BIRD", "SKY", "RUN"];
+        const sampleWordsES = ["CASA", "AMOR", "LUNA"];
+
+        // Card collection helpers
+        function addCardToCollection(cardId) {
+          const def = CARD_DEFS.find((c) => c.id === cardId);
+          if (!def) return;
+          player.cards.push({
+            id: def.id,
+            name: def.name,
+            type: def.type,
+            mods: def.mods,
+          });
+          beep(1600, 0.06);
+          farcadeHaptic();
+        }
+
+        function equipCardFromCollection(cardId) {
+          const idx = player.deck.indexOf(cardId);
+          if (idx >= 0) {
+            player.deck.splice(idx, 1);
+          } else {
+            if (player.deck.length >= 4) {
+              player.deck.shift();
+            }
+            player.deck.push(cardId);
+          }
+          applyEquipmentToPlayer();
+        }
+
+        // World implementations
+        function initFlappy() {
+          worldState.pipes = [];
+          worldState.spawnTimer = -SPAWN_LEAD;
+          worldState.nextPipeDist = Math.random() * (PIPE_DISTANCE_MAX - PIPE_DISTANCE_MIN) + PIPE_DISTANCE_MIN;
+          worldState.localScore = 0;
+          worldState.letters = [];
+          worldState.cards = [];
+        }
+
+        function updateFlappy(dt) {
+          worldState.spawnTimer += PIPE_SPEED * dt;
+          if (worldState.spawnTimer >= worldState.nextPipeDist) {
+            const gap = Math.round(Math.random() * (PIPE_GAP_MAX - PIPE_GAP_MIN) + PIPE_GAP_MIN);
+            const minCenter = SAFE_MARGIN + gap / 2 + 10;
+            const maxCenter = H - SAFE_MARGIN - gap / 2 - 10;
+            const center = Math.round(Math.random() * (maxCenter - minCenter) + minCenter);
+            const x = W + PIPE_WIDTH;
+            const topRect = {
+              x: x,
+              y: 0,
+              w: PIPE_WIDTH,
+              h: Math.max(10, center - gap / 2),
+              scored: false,
+            };
+            const bottomRect = {
+              x: x,
+              y: center + gap / 2,
+              w: PIPE_WIDTH,
+              h: Math.max(10, H - (center + gap / 2)),
+              scored: false,
+            };
+            worldState.pipes.push({
+              top: topRect,
+              bottom: bottomRect,
+              center,
+            });
+
+            if (Math.random() < 0.4) {
+              const languages = ["EN", "ES"];
+              const lang = languages[Math.floor(Math.random() * languages.length)];
+              const letters = lang === "EN" ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ" : "AEIOULNRSCT";
+              const letter = letters.charAt(Math.floor(Math.random() * letters.length));
+              worldState.letters.push({
+                x: x + PIPE_WIDTH / 2,
+                y: center,
+                r: 12,
+                letter,
+                lang,
+              });
+            }
+
+            if (Math.random() < 0.12) {
+              const birdCards = CARD_DEFS.filter((c) => c.type === "bird");
+              const c = birdCards[Math.floor(Math.random() * birdCards.length)];
+              worldState.cards.push({
+                x: x + PIPE_WIDTH / 2,
+                y: center - 30,
+                r: 14,
+                cardId: c.id,
+              });
+            }
+
+            worldState.nextPipeDist = Math.random() * (PIPE_DISTANCE_MAX - PIPE_DISTANCE_MIN) + PIPE_DISTANCE_MIN;
+            worldState.spawnTimer = 0;
+          }
+
+          for (let i = worldState.pipes.length - 1; i >= 0; i--) {
+            const p = worldState.pipes[i];
+            p.top.x -= PIPE_SPEED * dt;
+            p.bottom.x -= PIPE_SPEED * dt;
+            const px = p.top.x + p.top.w;
+            if (!p.scored && px < bird.x) {
+              p.scored = true;
+              score++;
+              worldState.localScore++;
+              farcadeHaptic();
+              beep(1200, 0.04);
+              grantXP(5);
+              player.coins += 2;
+              if (Math.random() < 0.12) player.tokens++;
+            }
+            if (p.top.x + p.top.w < -50) {
+              worldState.pipes.splice(i, 1);
+            } else if (
+              circleRectCollision(bird.x, bird.y, bird.radius, p.top.x, p.top.y, p.top.w, p.top.h) ||
+              circleRectCollision(bird.x, bird.y, bird.radius, p.bottom.x, p.bottom.y, p.bottom.w, p.bottom.h)
+            ) {
+              doGameOver();
+              return;
+            }
+          }
+
+          for (let i = worldState.letters.length - 1; i >= 0; i--) {
+            const t = worldState.letters[i];
+            t.x -= PIPE_SPEED * dt;
+            if (circleCircleCollision(bird.x, bird.y, bird.radius, t.x, t.y, t.r)) {
+              playerCollectedLetters[t.lang] = (playerCollectedLetters[t.lang] || "") + t.letter;
+              const collected = playerCollectedLetters[t.lang];
+              const possibles = t.lang === "EN" ? sampleWordsEN : sampleWordsES;
+              for (const w of possibles) {
+                if (collected.endsWith(w)) {
+                  grantXP(8);
+                  player.coins += 5;
+                  score += 2;
+                  beep(1500, 0.06);
+                }
+              }
+              if (Math.random() < 0.08) player.tokens++;
+              worldState.letters.splice(i, 1);
+              farcadeHaptic();
+            } else if (t.x < -50) worldState.letters.splice(i, 1);
+          }
+
+          for (let i = worldState.cards.length - 1; i >= 0; i--) {
+            const c = worldState.cards[i];
+            c.x -= PIPE_SPEED * dt;
+            if (circleCircleCollision(bird.x, bird.y, bird.radius, c.x, c.y, c.r)) {
+              addCardToCollection(c.cardId);
+              worldState.cards.splice(i, 1);
+              player.coins += 6;
+            } else if (c.x < -80) worldState.cards.splice(i, 1);
+          }
+
+          bird.vy += GRAVITY * dt;
+          bird.x += bird.vx * dt;
+          bird.y += bird.vy * dt;
+          bird.angle = Math.max(-0.6, Math.min(1.0, bird.vy / 400));
+          bird.x = Math.min(Math.max(bird.x, SAFE_MARGIN), W - SAFE_MARGIN);
+
+          if (bird.y - bird.radius < SAFE_MARGIN - 5 || bird.y + bird.radius > H - SAFE_MARGIN + 5) {
+            doGameOver();
+            return;
+          }
+        }
+
+        function initRunner() {
+          worldState.platforms = [];
+          const laneCount = 5;
+          for (let i = 0; i < laneCount; i++) {
+            const baseY = H - SAFE_MARGIN - i * 70; // Increased spacing
+            for (let j = 0; j < 2; j++) {
+              // Fewer platforms per lane
+              const a = 1 + Math.floor(Math.random() * 9);
+              const b = 1 + Math.floor(Math.random() * 9);
+              const solution = a + b;
+              let displayValue = solution;
+              let isCorrect = true;
+
+              // 33% chance of being an incorrect platform
+              if (Math.random() < 0.33) {
+                isCorrect = false;
+                // Generate a wrong answer that is close to the correct one
+                do {
+                  displayValue = solution + (Math.random() > 0.5 ? 1 : -1) * (Math.floor(Math.random() * 2) + 1);
+                } while (displayValue === solution || displayValue < 0);
+              }
+
+              const w = 100 + Math.random() * 60;
+              const x = Math.random() * (W * 1.5);
+              const speed = (90 + Math.random() * 120) * (player.stats.speed || 1.0);
+              const dir = Math.random() > 0.5 ? 1 : -1;
+
+              worldState.platforms.push({
+                x,
+                y: baseY - 12,
+                w,
+                h: 18,
+                speed: speed * dir,
+                problem: `${a}+${b}=`,
+                displayValue: displayValue,
+                isCorrect: isCorrect,
+              });
+            }
+          }
+          bird.vx = BIRD_VX * 1.2 * (player.stats.speed || 1.0);
+        }
+
+        function updateRunner(dt) {
+          bird.vy += GRAVITY * dt;
+          bird.y += bird.vy * dt;
+          bird.x += bird.vx * dt; // Automatic horizontal movement
+          bird.angle = Math.max(-0.6, Math.min(1.0, bird.vy / 400));
+
+          let landed = false;
+          for (const p of worldState.platforms) {
+            p.x += p.speed * dt;
+            if (p.speed > 0 && p.x > W + 200) p.x = -p.w - 200;
+            if (p.speed < 0 && p.x < -p.w - 200) p.x = W + 200;
+
+            // Collision check
+            if (
+              bird.x + bird.radius > p.x &&
+              bird.x - bird.radius < p.x + p.w &&
+              bird.y + bird.radius > p.y &&
+              bird.y + bird.radius < p.y + p.h + 12 &&
+              bird.vy >= 0
+            ) {
+              if (p.isCorrect) {
+                bird.y = p.y - bird.radius;
+                bird.vy = 0;
+                bird.angle = 0;
+                landed = true;
+              } else {
+                // Fall through incorrect platforms
+                if (!p.soundPlayed) {
+                  beep(220, 0.08);
+                  p.soundPlayed = true;
+                }
+              }
+            }
+          }
+
+          if (bird.y - bird.radius > H) {
+            doGameOver();
+            return;
+          }
+        }
+
+        function initWhack() {
+          worldState.moles = [];
+          worldState.hits = 0;
+          const cols = 3,
+            rows = 2;
+          const startX = W * 0.25,
+            startY = H * 0.4;
+          const spacingX = W * 0.25,
+            spacingY = 80;
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              const x = startX + c * spacingX;
+              const y = startY + r * spacingY;
+              worldState.moles.push({
+                x,
+                y,
+                up: false,
+                upTime: 0,
+                nextDelay: Math.random() * 1.6 + 0.4,
+              });
+            }
+          }
+        }
+
+        function updateWhack(dt) {
+          for (const m of worldState.moles) {
+            if (m.up) {
+              m.upTime -= dt;
+              if (m.upTime <= 0) {
+                m.up = false;
+                m.nextDelay = Math.random() * 1.6 + 0.6;
+              }
+            } else {
+              m.nextDelay -= dt;
+              if (m.nextDelay <= 0) {
+                m.up = true;
+                m.upTime = 0.8 + Math.random() * 1.0;
+              }
+            }
+          }
+        }
+
+        function handleWhackTap(px, py) {
+          for (const m of worldState.moles) {
+            if (m.up && circleCircleCollision(px, py, 20, m.x, m.y - 18, 18)) {
+              m.up = false;
+              m.nextDelay = Math.random() * 1.6 + 0.6;
+              worldState.hits++;
+              score++;
+              grantXP(3);
+              player.coins += 2;
+              beep(1400, 0.04);
+              farcadeHaptic();
+              return true;
+            }
+          }
+          return false;
+        }
+
+        function initMatch3() {
+          const cols = 5;
+          const rows = 5;
+          worldState.cols = cols;
+          worldState.rows = rows;
+          worldState.grid = Array(rows)
+            .fill(null)
+            .map(() => Array(cols).fill(""));
+          worldState.language = Math.random() < 0.7 ? "EN" : "ES";
+
+          const words = worldState.language === "EN" ? sampleWordsEN : sampleWordsES;
+          // Select ONE target word for the round to ensure it's solvable.
+          const targetWord = words[Math.floor(Math.random() * words.length)];
+          worldState.targetWords = [targetWord];
+
+          worldState.currentInput = "";
+          worldState.found = [];
+
+          const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+          const requiredLetters = targetWord.split("");
+
+          // Create a list of all grid positions and shuffle them
+          const positions = [];
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              positions.push({ r, c });
+            }
+          }
+          for (let i = positions.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [positions[i], positions[j]] = [positions[j], positions[i]];
+          }
+
+          // Place required letters first
+          requiredLetters.forEach((letter, index) => {
+            const pos = positions[index];
+            worldState.grid[pos.r][pos.c] = letter;
+          });
+
+          // Fill the rest of the grid with random letters
+          for (let i = requiredLetters.length; i < positions.length; i++) {
+            const pos = positions[i];
+            worldState.grid[pos.r][pos.c] = alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+          }
+
+          worldState.matchesMade = 0;
+        }
+
+        function updateMatch3(dt) {
+          // Time-based game over is handled by the global level timer
+        }
+
+        function handleMatchTap(px, py) {
+          const size = Math.min(W * 0.15, 48);
+          const gridW = worldState.cols * size;
+          const startX = (W - gridW) / 2;
+          const startY = H * 0.15;
+
+          for (let r = 0; r < worldState.rows; r++) {
+            for (let c = 0; c < worldState.cols; c++) {
+              const x = startX + c * size;
+              const y = startY + r * size;
+              if (px > x && px < x + size && py > y && py < y + size) {
+                const letter = worldState.grid[r][c];
+                worldState.currentInput += letter;
+                beep(1000, 0.03);
+
+                for (const word of worldState.targetWords) {
+                  if (worldState.currentInput === word && !worldState.found.includes(word)) {
+                    worldState.found.push(word);
+                    worldState.matchesMade++;
+                    worldState.currentInput = "";
+                    score += 3;
+                    grantXP(8);
+                    player.coins += 5;
+                    beep(1600, 0.06);
+                    farcadeHaptic();
+                    return true;
+                  }
+                }
+
+                if (worldState.currentInput.length > 6) {
+                  worldState.currentInput = "";
+                }
+                return true;
+              }
+            }
+          }
+          return false;
+        }
+
+        function initCross() {
+          worldState.lanes = [];
+          const laneCount = 5;
+          const laneHeight = 70;
+
+          const landmarks = [
+            { name: "Eiffel Tower", fact: "Found in Paris, France. Built 1889." },
+            { name: "Statue of Liberty", fact: "Gift from France; located in New York Harbor." },
+            { name: "Great Wall", fact: "Historic fortification across northern China." },
+            { name: "Christ the Redeemer", fact: "Iconic statue overlooking Rio de Janeiro, Brazil." },
+            { name: "Taj Mahal", fact: "Built as a mausoleum in Agra, India." },
+          ];
+
+          for (let i = 0; i < laneCount; i++) {
+            const y = H - START_ZONE_HEIGHT - SAFE_MARGIN - i * laneHeight;
+            const dir = i % 2 === 0 ? 1 : -1;
+            const speed = 90 + i * 20;
+            const cars = [];
+            const carCount = 3 + (i % 2);
+
+            for (let j = 0; j < carCount; j++) {
+              const w = 60 + Math.random() * 60;
+              const x = Math.random() * W * 1.5;
+              cars.push({ x, w, h: 30, speed: speed * dir });
+            }
+
+            const lm = landmarks[i % landmarks.length];
+            worldState.lanes.push({
+              y: y - 15,
+              cars,
+              dir,
+              speed,
+              landmark: lm,
+            });
+          }
+
+          worldState.letters = [];
+          worldState.cards = [];
+          bird.x = W * 0.5;
+          bird.y = H - START_ZONE_HEIGHT - bird.radius;
+          bird.vy = 0;
+        }
+
+        function updateCross(dt) {
+          for (const lane of worldState.lanes) {
+            for (const car of lane.cars) {
+              car.x += car.speed * dt;
+              if (car.speed > 0 && car.x > W + 200) car.x = -car.w - 200;
+              if (car.speed < 0 && car.x < -car.w - 200) car.x = W + 200;
+              if (circleRectCollision(bird.x, bird.y, bird.radius, car.x, lane.y, car.w, car.h)) {
+                doGameOver();
+                return;
+              }
+            }
+          }
+
+          bird.vy += GRAVITY * dt * 0.8;
+          bird.y += bird.vy * dt;
+
+          // Check for landing on the safe start zone
+          if (bird.y + bird.radius > H - START_ZONE_HEIGHT && bird.vy >= 0) {
+            bird.y = H - START_ZONE_HEIGHT - bird.radius;
+            bird.vy = 0;
+            bird.angle = 0;
+          }
+
+          bird.angle = Math.max(-0.6, Math.min(1.0, bird.vy / 400));
+          // In this level, the bird only moves vertically
+          bird.x = Math.min(Math.max(bird.x, SAFE_MARGIN), W - SAFE_MARGIN);
+
+          // Check for falling off the screen (should not happen with the safe zone)
+          if (bird.y - bird.radius > H) {
+            doGameOver();
+            return;
+          }
+        }
+
+        // Geography popup
+        let geographyPopup = null;
+
+        function showGeographyPopup(landmark) {
+          geographyPopup = {
+            text: landmark.name + ": " + landmark.fact,
+            ttl: 3.5,
+          };
+        }
+
+        // Global input handlers
+        let uiOpen = false;
+
+        function flap() {
+          // Prevent flapping in modes that don't use it, or when game is not active
+          if (!running || gameOverCalled || gameState !== GAME_STATES.PLAYING || worldIndex === 2) return;
+
+          // Prevent flapping through the ceiling, which causes an immediate game over
+          if (bird.y - bird.radius < SAFE_MARGIN) return;
+
+          bird.vy = bird._flapImpulse !== undefined ? bird._flapImpulse : FLAP_IMPULSE_BASE;
+          farcadeHaptic();
+          beep(880, 0.05); // One consistent sound for flapping
+        }
+
+        // Overlays state
+        let slotsActive = false;
+        let slotsState = {
+          spinning: false,
+          timer: 0,
+          reels: [0, 0, 0],
+          result: null,
+        };
+
+        function openSlotsMiniGame() {
+          slotsActive = true;
+          slotsState = {
+            spinning: false,
+            timer: 0,
+            reels: [0, 0, 0],
+            result: null,
+          };
+          running = false;
+        }
+
+        function startSlotsSpin() {
+          if (slotsState.spinning) return;
+          if (player.tokens <= 0) {
+            beep(220, 0.08);
+            return;
+          }
+          player.tokens--;
+          slotsState.spinning = true;
+          slotsState.timer = 1.4;
+          slotsState.result = null;
+          beep(900, 0.08);
+          farcadeHaptic();
+        }
+
+        function finalizeSlotsResult() {
+          const rand = Math.random();
+          if (rand < 0.35) {
+            const coins = 10 + Math.floor(Math.random() * 30);
+            player.coins += coins;
+            slotsState.result = {
+              type: "coins",
+              amount: coins,
+            };
+          } else if (rand < 0.6) {
+            const xp = 8 + Math.floor(Math.random() * 20);
+            grantXP(xp);
+            slotsState.result = {
+              type: "xp",
+              amount: xp,
+            };
+          } else if (rand < 0.85) {
+            const tok = 1 + Math.floor(Math.random() * 2);
+            player.tokens += tok;
+            slotsState.result = {
+              type: "tokens",
+              amount: tok,
+            };
+          } else {
+            const c = CARD_DEFS[Math.floor(Math.random() * CARD_DEFS.length)];
+            addCardToCollection(c.id);
+            slotsState.result = {
+              type: "card",
+              cardId: c.id,
+            };
+          }
+          farcadeHaptic();
+          beep(1400, 0.06);
+        }
+
+        // Input handling for overlays
+        function handleSlotsTap(px, py) {
+          if (!slotsActive) return false;
+
+          const boxW = Math.min(W - 40, 320);
+          const boxH = 180;
+          const x = (W - boxW) / 2;
+          const y = (H - boxH) / 2;
+
+          const cx = x + boxW - 18,
+            cy = y + 18,
+            cr = 12;
+          if ((px - cx) * (px - cx) + (py - cy) * (py - cy) < cr * cr) {
+            startNextLevel();
+            return true;
+          }
+
+          if (slotsState.result) {
+            const contX = x + boxW / 2 - 50,
+              contY = y + boxH - 50,
+              contW = 100,
+              contH = 30;
+            if (px > contX && px < contX + contW && py > contY && py < contY + contH) {
+              startNextLevel();
+              return true;
+            }
+          } else if (!slotsState.spinning) {
+            const sx = x + boxW / 2 - 50,
+              sy = y + boxH - 50,
+              sw = 100,
+              sh = 30;
+            if (px > sx && px < sx + sw && py > sy && py < sy + sh) {
+              startSlotsSpin();
+              return true;
+            }
+          }
+          return false;
+        }
+
+        // Level transition
+        function startLevelTransition(nextWorld) {
+          gameState = GAME_STATES.LEVEL_TRANSITION;
+          transitionTimer = 2.0;
+          transitionText = `${worldNames[nextWorld]}`;
+          beep(1800, 0.1);
+        }
+
+        function onPointerDown(e) {
+          e.preventDefault();
+          ensureAudioCtx(); // Ensure audio is ready on first user interaction
+          const p = getPointerPos(e);
+
+          if (gameState === GAME_STATES.GAME_OVER || gameState === GAME_STATES.GAME_COMPLETE) {
+            reset(true);
+            return;
+          }
+
+          switch (gameState) {
+            case GAME_STATES.LOADING:
+              return;
+            case GAME_STATES.CONTROLS:
+              gameState = GAME_STATES.PLAYING;
+              running = true;
+              setupWorld();
+              flap();
+              return;
+            case GAME_STATES.LEVEL_TRANSITION:
+            case GAME_STATES.INTERSTITIAL:
+              if (triviaPending) handleTriviaTap(p.x, p.y);
+              if (slotsActive) handleSlotsTap(p.x, p.y);
+              return;
+          }
+
+          if (uiOpen) {
+            if (!handleUIClick(p.x, p.y)) {
+              uiOpen = false;
+            }
+            return;
+          }
+
+          if (!running || gameOverCalled || gameState !== GAME_STATES.PLAYING) return;
+
+          if (worldIndex === 2) {
+            handleWhackTap(p.x, p.y);
+            return;
+          }
+          if (worldIndex === 3) {
+            handleMatchTap(p.x, p.y);
+            return;
+          }
+
+          if (worldIndex === 4) {
+            for (const lane of worldState.lanes) {
+              if (p.y > lane.y - 30 && p.y < lane.y + 30) {
+                showGeographyPopup(lane.landmark);
+                farcadeHaptic();
+                beep(1200, 0.04);
+                return;
+              }
+            }
+          }
+          flap();
+        }
+
+        // Keyboard support
+        function handleKeyDown(e) {
+          if (gameState === GAME_STATES.CONTROLS) {
+            if (e.code === "Space" || e.key === " ") {
+              e.preventDefault();
+              gameState = GAME_STATES.PLAYING;
+              running = true;
+              setupWorld();
+              flap();
+            }
+            return;
+          }
+
+          if (gameState === GAME_STATES.PLAYING || gameState === GAME_STATES.INTERSTITIAL) {
+            if (e.code === "Space" || e.key === " ") {
+              e.preventDefault();
+              flap();
+            } else if (e.key === "i" || e.key === "I") {
+              uiOpen = !uiOpen;
+            } else if (e.key === "k" || e.key === "K") {
+              if (player.inventory.length > 0) toggleEquipItem(player.inventory[0].id);
+            } else if (e.key === "s" || e.key === "S") {
+              if (gameState === GAME_STATES.PLAYING) {
+                gameState = GAME_STATES.INTERSTITIAL;
+                running = false;
+                openSlotsMiniGame();
+              }
+            } else if (e.key === "Escape") {
+              if (uiOpen) {
+                uiOpen = false;
+              } else if (gameState === GAME_STATES.INTERSTITIAL) {
+                startNextLevel();
+              }
+            }
+            return;
+          }
+
+          if (gameState === GAME_STATES.GAME_OVER || gameState === GAME_STATES.GAME_COMPLETE) {
+            if (e.code === "Space" || e.key === " ") {
+              e.preventDefault();
+              reset(true);
+            }
+            return;
+          }
+        }
+
+        // Game Over
+        function doGameOver() {
+          if (gameOverCalled) return;
+          beep(130, 0.18);
+          farcadeGameOver(score);
+          // The Farcade SDK handles the Game Over UI. By not changing the
+          // gameState here, we prevent our game's own UI from drawing.
+          running = false;
+        }
+
+        // Trivia overlay handling
+        function pickTrivia() {
+          const num1 = Math.floor(Math.random() * 10) + 1;
+          const num2 = Math.floor(Math.random() * 10) + 1;
+          const correctAnswer = num1 + num2;
+
+          const choices = [correctAnswer];
+          while (choices.length < 3) {
+            const wrongAnswer = correctAnswer + (Math.floor(Math.random() * 5) + 1) * (Math.random() < 0.5 ? 1 : -1);
+            if (!choices.includes(wrongAnswer) && wrongAnswer > 0) {
+              choices.push(wrongAnswer);
+            }
+          }
+
+          // Shuffle choices
+          for (let i = choices.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [choices[i], choices[j]] = [choices[j], choices[i]];
+          }
+
+          triviaPending = {
+            q: `What is ${num1} + ${num2}?`,
+            choices: choices,
+            answer: choices.indexOf(correctAnswer),
+          };
+        }
+
+        function handleTriviaTap(px, py) {
+          if (!triviaPending) return;
+          const boxW = Math.min(W - 40, 340);
+          const boxH = Math.min(H - 160, 220);
+          const x = (W - boxW) / 2;
+          const y = (H - boxH) / 2;
+          const choiceYStart = y + 80;
+          for (let i = 0; i < triviaPending.choices.length; i++) {
+            const iy = choiceYStart + i * 38;
+            if (px > x + 16 && px < x + boxW - 16 && py > iy - 18 && py < iy + 12) {
+              const correct = i === triviaPending.answer;
+              if (correct) {
+                grantXP(12);
+                player.coins += 8;
+                beep(1600, 0.06);
+                farcadeHaptic();
+              } else {
+                beep(300, 0.06);
+              }
+              startNextLevel();
+              return;
+            }
+          }
+        }
+
+        // New function to handle advancing after an interstitial
+        function startNextLevel() {
+          triviaPending = null;
+          slotsActive = false;
+
+          worldIndex = (worldIndex + 1) % worldNames.length; // Loop through levels
+          startLevelTransition(worldIndex);
+        }
+
+        // World progression
+        function advanceWorld() {
+          farcadeHaptic();
+          beep(1400, 0.08);
+          grantXP(10 + worldIndex * 5);
+          score += 5; // Bonus for completing a level
+          player.coins += 8 + worldIndex * 3;
+          player.mapProgress = Math.max(player.mapProgress, worldIndex);
+
+          gameState = GAME_STATES.INTERSTITIAL;
+          running = false;
+
+          // Randomly pick an interstitial to show between levels
+          if (player.tokens > 0 && Math.random() < 0.5) {
+            openSlotsMiniGame();
+          } else {
+            pickTrivia();
+          }
+        }
+
+        function setupWorld() {
+          bird.radius = Math.max(8, Math.min(22, BIRD_RADIUS * (H / 600)));
+          bird.x = W * 0.2; // Start further back
+          bird.y = H * 0.5;
+          bird.vx = BIRD_VX;
+          bird.vy = 0;
+          bird.angle = 0;
+          running = true;
+          applyEquipmentToPlayer();
+          beatTimer = 0;
+          lastBeat = performance.now() / 1000;
+          worldState.levelTimer = LEVEL_DURATION;
+
+          bird.y -= 3 * bird.radius;
+
+          switch (worldIndex) {
+            case 0:
+              initFlappy();
+              break;
+            case 1:
+              initRunner();
+              break;
+            case 2:
+              initWhack();
+              break;
+            case 3:
+              initMatch3();
+              break;
+            case 4:
+              initCross();
+              break;
+          }
+        }
+
+        // Global reset/start
+        function reset(fullStart = true) {
+          score = 0;
+          running = false;
+          gameOverCalled = false;
+          if (fullStart) {
+            player.level = 1;
+            player.xp = 0;
+            player.xpToLevel = 100;
+            player.coins = 50;
+            player.skillPoints = 0;
+            player.stats = {
+              speed: 1.0,
+              reaction: 1.0,
+              puzzle: 1.0,
+            };
+            player.equipment = {
+              wings: null,
+              boots: null,
+              gloves: null,
+              gem: null,
+            };
+            player.inventory = [EQUIPMENT_DEFS.wings_1];
+            player.cards = [];
+            player.deck = [];
+            player.tokens = 2;
+            player.mapProgress = 0;
+            playerCollectedLetters = {
+              EN: "",
+              ES: "",
+            };
+            worldIndex = 0;
+          }
+
+          gameState = GAME_STATES.CONTROLS; // Show controls on reset for better UX
+
+          lastTime = performance.now();
+          if (audioCtx && audioCtx.state === "suspended") {
+            audioCtx.resume().catch(() => {});
+          }
+        }
+
+        // Inventory & equipment helpers
+        function toggleEquipItem(id) {
+          const it = player.inventory.find((x) => x.id === id);
+          if (!it) return;
+          const slot = it.slot;
+          if (player.equipment[slot] && player.equipment[slot].id === id) player.equipment[slot] = null;
+          else player.equipment[slot] = it;
+          applyEquipmentToPlayer();
+        }
+
+        // Draw helpers
+        function drawBackground() {
+          const g = ctx.createLinearGradient(0, 0, 0, H);
+          g.addColorStop(0, "#aee6ff");
+          g.addColorStop(1, "#78c9ff");
+          ctx.fillStyle = g;
+          ctx.fillRect(0, 0, W, H);
+
+          for (let i = 0; i < bgLayers.length; i++) {
+            const L = bgLayers[i];
+            const speed = L.speed;
+            const offset = (bgOffset * (speed / PIPE_SPEED)) % (W + 200);
+            ctx.save();
+            ctx.globalAlpha = 0.9 - i * 0.15;
+            const gs = ctx.createLinearGradient(0, H * 0.2, 0, H);
+            gs.addColorStop(0, L.color1);
+            gs.addColorStop(1, L.color2);
+            ctx.fillStyle = gs;
+            for (let x = -200 - offset; x < W + 200; x += 160) {
+              const hh = 40 + i * 20;
+              ctx.beginPath();
+              ctx.ellipse(x + 80, H - (60 + i * 30), 120 + i * 40, hh, 0, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.restore();
+          }
+        }
+
+        function drawLoadingScreen() {
+          const g = ctx.createLinearGradient(0, 0, 0, H);
+          g.addColorStop(0, "#667eea");
+          g.addColorStop(0.5, "#764ba2");
+          g.addColorStop(1, "#f093fb");
+          ctx.fillStyle = g;
+          ctx.fillRect(0, 0, W, H);
+
+          const time = performance.now() / 1000;
+          for (let i = 0; i < 20; i++) {
+            const x = ((i * 123.456) % 1) * W;
+            const y = (Math.sin(time * 0.5 + i) + 1) * 0.5 * H;
+            const size = 2 + Math.sin(time * 2 + i) * 1;
+            ctx.fillStyle = `rgba(255,255,255,${0.3 + Math.sin(time + i) * 0.2})`;
+            ctx.beginPath();
+            ctx.arc(x, y, size, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          ctx.fillStyle = "#ffffff";
+          ctx.font = getFont("title-sub");
+          ctx.textAlign = "center";
+          ctx.shadowColor = "rgba(0,0,0,0.5)";
+          ctx.shadowBlur = 10;
+          ctx.fillText("ULTIMATE", W / 2, H / 2 - H * 0.08);
+
+          ctx.font = getFont("title-main");
+          const gradient = ctx.createLinearGradient(0, H / 2 - 20, 0, H / 2 + 40);
+          gradient.addColorStop(0, "#ffd700");
+          gradient.addColorStop(0.5, "#ffaa00");
+          gradient.addColorStop(1, "#ff6b6b");
+          ctx.fillStyle = gradient;
+          ctx.fillText("REMIX", W / 2, H / 2 + H * 0.03);
+          ctx.shadowBlur = 0;
+
+          ctx.fillStyle = "rgba(255,255,255,0.8)";
+          ctx.font = getFont("body-small");
+          ctx.fillText("Multi-Genre Arcade Adventure", W / 2, H / 2 + H * 0.1);
+
+          const barW = W * 0.6;
+          const barH = 8;
+          const barX = (W - barW) / 2;
+          const barY = H * 0.75;
+
+          ctx.fillStyle = "rgba(255,255,255,0.2)";
+          ctx.fillRect(barX, barY, barW, barH);
+          ctx.fillStyle = "#00ff88";
+          const progressW = (loadingProgress / 100) * barW;
+          ctx.fillRect(barX, barY, progressW, barH);
+
+          ctx.fillStyle = "#ffffff";
+          ctx.font = `${Math.min(16, W * 0.035)}px sans-serif`;
+          ctx.fillText(`Loading... ${Math.floor(loadingProgress)}%`, W / 2, barY + 35);
+        }
+
+        function drawControlsScreen() {
+          const g = ctx.createLinearGradient(0, 0, 0, H);
+          g.addColorStop(0, "#2C3E50");
+          g.addColorStop(1, "#4A6741");
+          ctx.fillStyle = g;
+          ctx.fillRect(0, 0, W, H);
+
+          ctx.fillStyle = "#ffffff";
+          ctx.font = getFont("controls-title");
+          ctx.textAlign = "center";
+          ctx.fillText("ULTIMATE REMIX", W / 2, H * 0.1);
+
+          ctx.font = getFont("controls-body");
+          ctx.fillStyle = "#ecf0f1";
+
+          wrapText("Tap or Click to Flap, Jump, and Interact.", W / 2, H * 0.4, W * 0.9, Math.min(24, H * 0.04));
+
+          ctx.fillStyle = "#f39c12";
+          ctx.font = getFont("controls-prompt");
+          const pulse = Math.sin(performance.now() / 300) * 0.3 + 0.7;
+          ctx.globalAlpha = pulse;
+          ctx.fillText("TAP TO START", W / 2, H * 0.85);
+          ctx.globalAlpha = 1;
+        }
+
+        function drawLevelTransitionScreen() {
+          ctx.fillStyle = "rgba(0, 0, 0, 0.8)";
+          ctx.fillRect(0, 0, W, H);
+
+          const progress = 1 - transitionTimer / 2.0;
+          const circleRadius = progress * Math.max(W, H) * 0.7;
+
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(W / 2, H / 2, circleRadius, 0, Math.PI * 2);
+          ctx.clip();
+
+          const gradient = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, circleRadius);
+          gradient.addColorStop(0, "#4facfe");
+          gradient.addColorStop(1, "#00f2fe");
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, W, H);
+          ctx.restore();
+
+          ctx.fillStyle = "#ffffff";
+          ctx.font = `bold ${Math.min(36, W * 0.09)}px sans-serif`;
+          ctx.textAlign = "center";
+          ctx.shadowColor = "rgba(0,0,0,0.8)";
+          ctx.shadowBlur = 15;
+          ctx.fillText(transitionText, W / 2, H / 2);
+          ctx.shadowBlur = 0;
+        }
+
+        function drawWorld() {
+          if (
+            gameState !== GAME_STATES.PLAYING &&
+            gameState !== GAME_STATES.GAME_OVER &&
+            gameState !== GAME_STATES.GAME_COMPLETE
+          )
+            return;
+
+          // Only draw the bird in relevant game modes
+          if (worldIndex === 0 || worldIndex === 1 || worldIndex === 4) {
+            ctx.save();
+            ctx.translate(bird.x, bird.y);
+            ctx.rotate(bird.angle);
+            const bodyGrad = ctx.createLinearGradient(-bird.radius, -bird.radius, bird.radius, bird.radius);
+            bodyGrad.addColorStop(0, "#ffd66b");
+            bodyGrad.addColorStop(1, "#ffb347");
+            ctx.fillStyle = bodyGrad;
+            ctx.beginPath();
+            ctx.arc(0, 0, bird.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "rgba(0,0,0,0.08)";
+            ctx.beginPath();
+            ctx.ellipse(-4, 0, bird.radius * 0.6, bird.radius * 0.35, -0.6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#ff8a3d";
+            ctx.beginPath();
+            ctx.moveTo(bird.radius * 0.7, -4);
+            ctx.lineTo(bird.radius * 1.4, 0);
+            ctx.lineTo(bird.radius * 0.7, 6);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = "#fff";
+            ctx.beginPath();
+            ctx.arc(-4, -4, Math.max(2, bird.radius * 0.22), 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = "#333";
+            ctx.beginPath();
+            ctx.arc(-3.2, -4, Math.max(1, bird.radius * 0.13), 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
+
+          ctx.save();
+          if (worldIndex === 0) {
+            for (const p of worldState.pipes) {
+              const grad = ctx.createLinearGradient(p.top.x, 0, p.top.x + p.top.w, 0);
+              grad.addColorStop(0, "#3aa14a");
+              grad.addColorStop(1, "#2b8a39");
+              ctx.fillStyle = grad;
+              ctx.fillRect(p.top.x, p.top.y, p.top.w, p.top.h);
+              ctx.fillStyle = "#1f6a2a";
+              ctx.fillRect(p.top.x - 8, p.top.h - 10, p.top.w + 16, 12);
+              ctx.fillStyle = grad;
+              ctx.fillRect(p.bottom.x, p.bottom.y, p.bottom.w, p.bottom.h);
+              ctx.fillStyle = "#1f6a2a";
+              ctx.fillRect(p.bottom.x - 8, p.bottom.y, p.bottom.w + 16, 12);
+            }
+            for (const t of worldState.letters) {
+              ctx.fillStyle = "rgba(255,255,255,0.95)";
+              ctx.beginPath();
+              ctx.arc(t.x, t.y, t.r, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.fillStyle = "#333";
+              ctx.font = getFont("item-bold");
+              ctx.textAlign = "center";
+              ctx.fillText(t.letter, t.x, t.y + 4);
+              ctx.font = getFont("item");
+              ctx.fillText(t.lang, t.x, t.y + 16);
+            }
+            for (const c of worldState.cards || []) {
+              ctx.fillStyle = "rgba(255,230,200,0.95)";
+              ctx.beginPath();
+              ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.fillStyle = "#333";
+              ctx.font = getFont("item");
+              ctx.textAlign = "center";
+              const name = (CARD_DEFS.find((cd) => cd.id === c.cardId) || {}).name || "?";
+              ctx.fillText(name.split(" ")[0], c.x, c.y + 4);
+            }
+          } else if (worldIndex === 1) {
+            for (const p of worldState.platforms) {
+              ctx.fillStyle = p.isCorrect ? "#8b5a2b" : "#b22222"; // Brown for correct, Red for incorrect
+              ctx.fillRect(p.x, p.y, p.w, p.h);
+              ctx.fillStyle = p.isCorrect ? "#6b3f1a" : "#800000";
+              ctx.fillRect(p.x, p.y, p.w, 4);
+
+              ctx.fillStyle = "#fff";
+              ctx.font = getFont("platform");
+              ctx.textAlign = "center";
+              ctx.textBaseline = "middle";
+
+              const text = p.problem + " " + p.displayValue;
+              const textMetrics = ctx.measureText(text);
+              const padding = 8;
+              const availableWidth = p.w - padding;
+
+              if (textMetrics.width > availableWidth) {
+                const scale = availableWidth / textMetrics.width;
+                ctx.save();
+                ctx.translate(p.x + p.w / 2, p.y + p.h / 2);
+                ctx.scale(scale, 1);
+                ctx.fillText(text, 0, 0);
+                ctx.restore();
+              } else {
+                ctx.fillText(text, p.x + p.w / 2, p.y + p.h / 2);
+              }
+            }
+            ctx.textBaseline = "alphabetic"; // Reset baseline
+          } else if (worldIndex === 2) {
+            for (const m of worldState.moles) {
+              ctx.save();
+              ctx.translate(m.x, m.y);
+              ctx.fillStyle = "#2f2f2f";
+              ctx.beginPath();
+              ctx.ellipse(0, 6, 34, 10, 0, 0, Math.PI * 2);
+              ctx.fill();
+              if (m.up) {
+                ctx.translate(0, -18);
+                ctx.fillStyle = "#ffce9e";
+                ctx.beginPath();
+                ctx.arc(0, 0, 18, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = "#5b3b2a";
+                ctx.beginPath();
+                ctx.arc(-6, -2, 5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(6, -2, 4, 0, Math.PI * 2);
+                ctx.fill();
+              }
+              ctx.restore();
+            }
+          } else if (worldIndex === 3) {
+            const size = Math.min(W * 0.15, 48);
+            const gridW = worldState.cols * size;
+            const startX = (W - gridW) / 2;
+            const startY = H * 0.15;
+            for (let r = 0; r < worldState.rows; r++) {
+              for (let c = 0; c < worldState.cols; c++) {
+                ctx.fillStyle = "#6fd0ff";
+                const x = startX + c * size;
+                const y = startY + r * size;
+                ctx.fillRect(x + 4, y + 4, size - 8, size - 8);
+                ctx.fillStyle = "#fff";
+                ctx.font = "bold 16px sans-serif";
+                ctx.textAlign = "center";
+                ctx.fillText(worldState.grid[r][c] || "", x + size / 2, y + size / 2 + 6);
+              }
+            }
+            ctx.fillStyle = "#fff";
+            ctx.font = getFont("item");
+            ctx.textAlign = "center";
+            wrapText(
+              "Spell (" + worldState.language + "): " + worldState.targetWords.join(", "),
+              W / 2,
+              startY - 20,
+              W * 0.9,
+              14,
+            );
+            ctx.fillText("Input: " + worldState.currentInput, W / 2, startY + worldState.rows * size + 18);
+          } else if (worldIndex === 4) {
+            ctx.fillStyle = "#7f8c8d";
+            ctx.fillRect(0, H - START_ZONE_HEIGHT, W, START_ZONE_HEIGHT);
+            ctx.fillStyle = "#f1c40f";
+            for (let i = 0; i < W; i += 40) {
+              ctx.fillRect(i, H - START_ZONE_HEIGHT, 20, 5);
+            }
+            for (const lane of worldState.lanes) {
+              for (const car of lane.cars) {
+                ctx.fillStyle = "#ff6b6b";
+                ctx.fillRect(car.x, lane.y, car.w, car.h);
+                ctx.fillStyle = "#c04";
+                ctx.fillRect(car.x + 6, lane.y + 6, Math.min(20, car.w - 12), 6);
+              }
+              ctx.fillStyle = "rgba(255,255,255,0.9)";
+              ctx.font = getFont("item");
+              ctx.textAlign = "left";
+              ctx.fillText(lane.landmark.name, 8, lane.y - 6, W / 3);
+            }
+          }
+          ctx.restore();
+        }
+
+        function drawRPGOverlay() {
+          if (!uiOpen) return;
+          const pad = 12;
+          const boxW = Math.min(W - 40, 340);
+          const boxH = Math.min(H - 80, 420);
+          const x = (W - boxW) / 2;
+          const y = (H - boxH) / 2;
+          ctx.save();
+          ctx.fillStyle = "rgba(0,0,0,0.75)";
+          ctx.fillRect(x, y, boxW, boxH);
+          ctx.fillStyle = "#fff";
+          ctx.font = getFont("button");
+          ctx.textAlign = "left";
+          ctx.fillText("Character", x + pad, y + pad + 16);
+          ctx.font = getFont("item");
+          ctx.fillText(
+            "Level: " + player.level + "    XP: " + player.xp + "/" + player.xpToLevel,
+            x + pad,
+            y + pad + 38,
+          );
+          ctx.fillText("Coins: " + player.coins + "    Tokens: " + player.tokens, x + pad, y + pad + 56);
+          ctx.fillText("Stats:", x + pad, y + pad + 80);
+          wrapText(
+            `Speed: ${player.stats.speed.toFixed(2)} | Reaction: ${player.stats.reaction.toFixed(2)}`,
+            x + boxW / 2,
+            y + pad + 98,
+            boxW - pad * 2,
+            14,
+          );
+
+          ctx.fillText("Inventory:", x + pad, y + pad + 120);
+          const itemStartY = y + pad + 138;
+          ctx.font = getFont("item");
+          for (let i = 0; i < Math.min(player.inventory.length, 8); i++) {
+            const it = player.inventory[i];
+            const iy = itemStartY + i * 28;
+            const isEq = player.equipment[it.slot] && player.equipment[it.slot].id === it.id;
+            ctx.fillStyle = isEq ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.02)";
+            ctx.fillRect(x + pad, iy - 8, boxW - pad * 2, 24);
+            ctx.fillStyle = "#fff";
+            ctx.fillText(it.name + " (" + it.slot + ")", x + pad + 6, iy + 8);
+            ctx.fillStyle = isEq ? "#f39c12" : "#3498db";
+            ctx.textAlign = "right";
+            ctx.fillText(isEq ? "[Equipped]" : "[Tap to Equip]", x + boxW - pad - 6, iy + 8);
+            ctx.textAlign = "left";
+          }
+
+          ctx.fillStyle = "#fff";
+          ctx.font = getFont("item");
+          ctx.textAlign = "center";
+          ctx.fillText("Tap outside or 'I' to close", x + boxW / 2, y + boxH - pad - 8);
+
+          ctx.restore();
+        }
+
+        function drawTrivia() {
+          if (!triviaPending) return;
+          const boxW = Math.min(W - 40, 340);
+          const boxH = Math.min(H - 160, 240);
+          const x = (W - boxW) / 2;
+          const y = (H - boxH) / 2;
+          ctx.save();
+          ctx.fillStyle = "rgba(0,0,0,0.8)";
+          ctx.fillRect(x, y, boxW, boxH);
+          ctx.fillStyle = "#fff";
+          ctx.font = "bold 16px sans-serif";
+          ctx.textAlign = "center";
+          wrapText(triviaPending.q, x + boxW / 2, y + 36, boxW - 32, 20);
+
+          ctx.font = getFont("button");
+          const choiceYStart = y + 80;
+          for (let i = 0; i < triviaPending.choices.length; i++) {
+            const iy = choiceYStart + i * 38;
+            ctx.fillStyle = "rgba(255,255,255,0.1)";
+            ctx.fillRect(x + 16, iy - 18, boxW - 32, 30);
+            ctx.fillStyle = "#ffd66b";
+            ctx.textAlign = "left";
+            ctx.fillText(i + 1 + ". " + triviaPending.choices[i], x + 24, iy + 5);
+          }
+          ctx.restore();
+        }
+
+        function drawSlotsOverlay() {
+          if (!slotsActive) return;
+
+          const boxW = Math.min(W - 40, 320);
+          const boxH = 180;
+          const x = (W - boxW) / 2;
+          const y = (H - boxH) / 2;
+
+          ctx.save();
+          ctx.fillStyle = "rgba(0,20,40,0.85)";
+          ctx.fillRect(x, y, boxW, boxH);
+          ctx.strokeStyle = "#4facfe";
+          ctx.strokeRect(x, y, boxW, boxH);
+
+          // Title and Close Button
+          ctx.fillStyle = "#fff";
+          ctx.font = "bold 16px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText("Slots Minigame", x + boxW / 2, y + 28);
+          ctx.font = "bold 18px sans-serif";
+          ctx.fillText("X", x + boxW - 18, y + 22);
+
+          // Reels
+          const reelX = x + boxW / 2 - 60;
+          ctx.textBaseline = "middle";
+          for (let i = 0; i < 3; i++) {
+            ctx.fillStyle = "#fff";
+            ctx.fillRect(reelX + i * 40, y + 45, 36, 50);
+            ctx.fillStyle = "#000";
+            ctx.font = "bold 32px sans-serif";
+            ctx.fillText(slotsState.reels[i], reelX + 18 + i * 40, y + 70);
+          }
+
+          // Result / Button
+          if (slotsState.result) {
+            ctx.fillStyle = "#ffd700";
+            ctx.font = getFont("button");
+            let resultText = "You won!";
+            if (slotsState.result.type === "coins") resultText = `You won ${slotsState.result.amount} coins!`;
+            if (slotsState.result.type === "xp") resultText = `You won ${slotsState.result.amount} XP!`;
+            if (slotsState.result.type === "tokens") resultText = `You won ${slotsState.result.amount} tokens!`;
+            if (slotsState.result.type === "card") resultText = `New Card!`;
+            ctx.fillText(resultText, x + boxW / 2, y + 115);
+
+            const btnX = x + boxW / 2 - 50,
+              btnY = y + boxH - 50,
+              btnW = 100,
+              btnH = 30;
+            ctx.fillStyle = "#2ecc71";
+            ctx.fillRect(btnX, btnY, btnW, btnH);
+            ctx.fillStyle = "#fff";
+            ctx.font = getFont("button");
+            ctx.fillText("Continue", x + boxW / 2, btnY + 15);
+          } else {
+            const btnX = x + boxW / 2 - 60,
+              btnY = y + boxH - 50,
+              btnW = 120,
+              btnH = 30;
+            ctx.fillStyle = slotsState.spinning ? "#7f8c8d" : "#3498db";
+            ctx.fillRect(btnX, btnY, btnW, btnH);
+            ctx.fillStyle = "#fff";
+            ctx.font = getFont("button");
+            ctx.fillText(
+              slotsState.spinning ? "Spinning..." : `Spin (Tokens: ${player.tokens})`,
+              x + boxW / 2,
+              btnY + 15,
+            );
+          }
+          ctx.textBaseline = "alphabetic"; // Reset
+          ctx.restore();
+        }
+
+        function wrapText(text, x, y, maxWidth, lineHeight) {
+          const words = text.split(" ");
+          let line = "";
+          let lines = [];
+          ctx.textAlign = "center";
+          for (let n = 0; n < words.length; n++) {
+            const testLine = line + words[n] + " ";
+            const metrics = ctx.measureText(testLine);
+            if (metrics.width > maxWidth && n > 0) {
+              lines.push(line);
+              line = words[n] + " ";
+            } else {
+              line = testLine;
+            }
+          }
+          lines.push(line);
+
+          let startY = y - ((lines.length - 1) * lineHeight) / 2;
+
+          for (let i = 0; i < lines.length; i++) {
+            ctx.fillText(lines[i], x, startY + i * lineHeight);
+          }
+
+          ctx.textAlign = "left"; // Reset alignment
+        }
+
+        function drawBeat() {
+          if ((worldIndex !== 0 && worldIndex !== 4) || gameState !== GAME_STATES.PLAYING) return;
+          const cx = W / 2,
+            cy = 36;
+          const maxR = 16 + beatPulse * 24;
+          ctx.save();
+          ctx.globalAlpha = 0.9;
+          ctx.fillStyle = "rgba(255,240,180,0.12)";
+          ctx.beginPath();
+          ctx.arc(cx, cy, maxR, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#ffd66b";
+          ctx.beginPath();
+          ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        function drawGameOverScreen() {
+          ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+          ctx.fillRect(0, 0, W, H);
+          ctx.fillStyle = "#ffffff";
+          ctx.textAlign = "center";
+
+          ctx.font = getFont("title-screen");
+          wrapText("GAME OVER", W / 2, H / 2 - 80, W * 0.9, 42);
+
+          ctx.font = getFont("subtitle");
+          ctx.fillText(`Final Score: ${score}`, W / 2, H / 2 - 20);
+
+          ctx.font = getFont("body");
+          const pulse = Math.sin(performance.now() / 300) * 0.3 + 0.7;
+          ctx.globalAlpha = pulse;
+          wrapText("Tap or Press Space to Play Again", W / 2, H / 2 + 50, W * 0.9, 24);
+          ctx.globalAlpha = 1;
+        }
+
+        function drawGameCompleteScreen() {
+          ctx.fillStyle = "rgba(44, 62, 80, 0.85)";
+          ctx.fillRect(0, 0, W, H);
+
+          // Title
+          ctx.fillStyle = "#f1c40f"; // Gold color
+          ctx.font = getFont("title-screen");
+          ctx.textAlign = "center";
+          ctx.shadowColor = "rgba(0,0,0,0.5)";
+          ctx.shadowBlur = 8;
+          wrapText("CONGRATULATIONS!", W / 2, H * 0.15, W * 0.9, 42);
+          ctx.shadowBlur = 0;
+
+          // Draw a simple trophy
+          const trophyX = W / 2;
+          const trophyY = H * 0.4; // Adjusted Y for spacing
+          ctx.fillStyle = "#f1c40f";
+          ctx.strokeStyle = "#e67e22";
+          ctx.lineWidth = 3;
+
+          ctx.beginPath();
+          ctx.moveTo(trophyX - 50, trophyY - 50);
+          ctx.lineTo(trophyX - 50, trophyY - 20);
+          ctx.arcTo(trophyX - 50, trophyY, trophyX - 30, trophyY, 20);
+          ctx.lineTo(trophyX + 30, trophyY);
+          ctx.arcTo(trophyX + 50, trophyY, trophyX + 50, trophyY - 20, 20);
+          ctx.lineTo(trophyX + 50, trophyY - 50);
+          ctx.arc(trophyX, trophyY - 50, 60, 0, Math.PI, true);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+
+          // Base
+          ctx.beginPath();
+          ctx.moveTo(trophyX - 30, trophyY);
+          ctx.lineTo(trophyX - 20, trophyY + 40);
+          ctx.lineTo(trophyX + 20, trophyY + 40);
+          ctx.lineTo(trophyX + 30, trophyY);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillRect(trophyX - 40, trophyY + 40, 80, 10);
+          ctx.strokeRect(trophyX - 40, trophyY + 40, 80, 10);
+
+          // Final Score
+          ctx.fillStyle = "#ffffff";
+          ctx.font = getFont("subtitle");
+          ctx.textAlign = "center";
+          ctx.fillText(`Final Score: ${score}`, W / 2, H * 0.65);
+
+          // Restart Prompt
+          ctx.font = getFont("body");
+          const pulse = Math.sin(performance.now() / 300) * 0.3 + 0.7;
+          ctx.globalAlpha = pulse;
+          wrapText("You've completed the Remix! Tap to play again.", W / 2, H * 0.85, W * 0.9, 24);
+          ctx.globalAlpha = 1;
+        }
+
+        // Detect UI clicks
+        function handleUIClick(px, py) {
+          const pad = 12;
+          const boxW = Math.min(W - 40, 340);
+          const boxH = Math.min(H - 80, 420);
+          const x = (W - boxW) / 2;
+          const y = (H - boxH) / 2;
+          const itemStartY = y + pad + 138;
+
+          if (px < x || px > x + boxW || py < y || py > y + boxH) {
+            return false; // Click was outside the box
+          }
+
+          for (let i = 0; i < Math.min(player.inventory.length, 8); i++) {
+            const iy = itemStartY + i * 28;
+            if (py > iy - 8 && py < iy + 16) {
+              toggleEquipItem(player.inventory[i].id);
+              return true;
+            }
+          }
+          return true; // Click was inside box but not on an item
+        }
+
+        // Main update
+        function update(dt) {
+          if (gameState === GAME_STATES.LOADING) {
+            loadingTimer += dt;
+            loadingProgress = Math.min(100, (loadingTimer / 1.5) * 100);
+
+            if (loadingProgress >= 100) {
+              gameState = GAME_STATES.CONTROLS;
+              controlsTimer = 0;
+              farcadeReady();
+            }
+            return;
+          }
+
+          if (
+            gameState === GAME_STATES.CONTROLS ||
+            gameState === GAME_STATES.GAME_OVER ||
+            gameState === GAME_STATES.GAME_COMPLETE ||
+            gameState === GAME_STATES.INTERSTITIAL
+          ) {
+            // Update slots animation even when paused
+            if (slotsActive && slotsState.spinning) {
+              slotsState.timer -= dt;
+              slotsState.reels = [
+                Math.floor(Math.random() * 9) + 1,
+                Math.floor(Math.random() * 9) + 1,
+                Math.floor(Math.random() * 9) + 1,
+              ];
+              if (slotsState.timer <= 0) {
+                slotsState.spinning = false;
+                finalizeSlotsResult();
+              }
+            }
+            return; // Paused states
+          }
+
+          if (gameState === GAME_STATES.LEVEL_TRANSITION) {
+            transitionTimer -= dt;
+            if (transitionTimer <= 0) {
+              gameState = GAME_STATES.PLAYING;
+              running = true;
+              setupWorld();
+            }
+            return;
+          }
+
+          if (!running || gameState !== GAME_STATES.PLAYING) return;
+
+          // Global level timer logic
+          if (worldState.levelTimer !== undefined) {
+            worldState.levelTimer -= dt;
+            if (worldState.levelTimer <= 0) {
+              advanceWorld();
+              return;
+            }
+          }
+
+          bgOffset += PIPE_SPEED * dt;
+
+          beatTimer += dt;
+          if (beatTimer >= beatInterval) {
+            beatTimer -= beatInterval;
+            lastBeat = performance.now() / 1000;
+            beatPulse = 1.0;
+          } else {
+            beatPulse = Math.max(0, beatPulse - dt * 2.5);
+          }
+
+          switch (worldIndex) {
+            case 0:
+              updateFlappy(dt);
+              break;
+            case 1:
+              updateRunner(dt);
+              break;
+            case 2:
+              updateWhack(dt);
+              break;
+            case 3:
+              updateMatch3(dt);
+              break;
+            case 4:
+              updateCross(dt);
+              break;
+          }
+        }
+
+        // Main draw
+        function draw() {
+          // Clear screen
+          ctx.fillStyle = "#87d3ff";
+          ctx.fillRect(0, 0, W, H);
+
+          switch (gameState) {
+            case GAME_STATES.LOADING:
+              drawLoadingScreen();
+              return;
+            case GAME_STATES.CONTROLS:
+              drawControlsScreen();
+              return;
+            case GAME_STATES.LEVEL_TRANSITION:
+              drawBackground();
+              drawWorld();
+              drawLevelTransitionScreen();
+              return;
+            case GAME_STATES.GAME_OVER:
+              drawBackground();
+              drawWorld();
+              drawGameOverScreen();
+              return;
+            case GAME_STATES.GAME_COMPLETE:
+              drawBackground();
+              drawWorld();
+              drawGameCompleteScreen();
+              return;
+          }
+
+          drawBackground();
+          drawWorld();
+
+          if (gameState === GAME_STATES.PLAYING) {
+            ctx.fillStyle = "rgba(0,0,0,0.55)";
+            ctx.font = getFont("ui");
+            ctx.textAlign = "left";
+            ctx.textBaseline = "top";
+            ctx.fillText("World: " + (worldIndex + 1), 12, 10);
+            ctx.textAlign = "right";
+            ctx.fillText("Score: " + score, W - 12, 10);
+            ctx.textAlign = "center";
+            ctx.fillText(`Time: ${Math.ceil(worldState.levelTimer)}`, W / 2, 10);
+
+            drawBeat();
+
+            if (geographyPopup) {
+              ctx.save();
+              const w = Math.min(W - 60, 320);
+              const h = 70;
+              const x = (W - w) / 2;
+              const y = 80;
+              ctx.fillStyle = "rgba(0,0,0,0.7)";
+              ctx.fillRect(x, y, w, h);
+              ctx.fillStyle = "#fff";
+              ctx.font = getFont("item");
+              ctx.textAlign = "left";
+              wrapText(geographyPopup.text, x + w / 2, y + 22, w - 24, 16);
+              ctx.restore();
+            }
+          }
+
+          // Draw overlays last
+          drawRPGOverlay();
+          drawTrivia();
+          drawSlotsOverlay();
+        }
+
+        // Loop
+        function loop(now) {
+          requestAnimationFrame(loop);
+          const t = now || performance.now();
+          const dt = Math.min(0.033, (t - lastTime) / 1000);
+          lastTime = t;
+
+          update(dt);
+          draw();
+
+          if (geographyPopup) {
+            geographyPopup.ttl -= dt;
+            if (geographyPopup.ttl <= 0) geographyPopup = null;
+          }
+        }
+
+        // Start sequence
+        function start() {
+          resize();
+          gameState = GAME_STATES.LOADING;
+          loadingProgress = 0;
+          loadingTimer = 0;
+          lastTime = performance.now();
+          loop(lastTime);
+        }
+
+        // Event Listeners
+        window.addEventListener("resize", resize);
+        window.addEventListener("orientationchange", () => setTimeout(resize, 80));
+        canvas.addEventListener("pointerdown", onPointerDown, {
+          passive: false,
+        });
+        canvas.addEventListener("touchstart", onPointerDown, {
+          passive: false,
+        });
+        document.addEventListener("keydown", handleKeyDown);
+        window.addEventListener("selectstart", (e) => e.preventDefault());
+        window.addEventListener("contextmenu", (e) => e.preventDefault());
+
+        // Farcade SDK Event Handlers
+        if (window.FarcadeSDK) {
+          window.FarcadeSDK.on("play_again", () => {
+            reset(true);
+          });
+          window.FarcadeSDK.on("toggle_mute", (data) => {
+            isMuted = data.isMuted;
+          });
+        }
+
+        // Initialize
+        start();
+      })();
+    </script>
+  </body>
+</html>
